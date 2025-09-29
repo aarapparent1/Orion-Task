@@ -9,7 +9,7 @@ import textwrap
 
 # Orion API (Render backend)
 ORION_API = "https://orion-memory.onrender.com"
-USER_ID = "demo"  # fixed for public demo
+USER_ID = "demo"  # shared demo space for public demo
 
 # ---------------------------
 # Helper: Call Orion Memory API
@@ -20,14 +20,13 @@ def call_orion(endpoint, payload=None, user_id=USER_ID):
             resp = requests.get(f"{ORION_API}/recall/{user_id}")
 
         elif endpoint == "remember":  # maps to /fact
-            if payload and "content" in payload:
-                body = {"user_id": user_id, "fact": payload["content"]}
-            else:
-                body = {"user_id": user_id, "fact": ""}
+            body = {"user_id": user_id, "fact": payload.get("content", "")}
             resp = requests.post(f"{ORION_API}/fact", json=body)
 
         elif endpoint == "summarize":
-            resp = requests.get(f"{ORION_API}/summarize/{user_id}")
+            body = {"user_id": user_id, "fact": payload.get("content", "")}
+            requests.post(f"{ORION_API}/fact", json=body)  # log the request
+            resp = requests.get(f"{ORION_API}/recall/{user_id}")
 
         elif endpoint == "decay":
             resp = requests.post(f"{ORION_API}/decay/{user_id}")
@@ -53,40 +52,57 @@ def call_orion(endpoint, payload=None, user_id=USER_ID):
 st.set_page_config(page_title="Orion Demo Suite", layout="wide")
 st.title("🚀 Orion AI API Suite")
 
-tab1, tab2 = st.tabs(["🧠 Memory", "✅ Task Tracker"])
+tab1, tab2 = st.tabs(["🧠 Memory Assistant", "✅ AI Task Manager"])
 
 # ---------------------------
-# Tab 1: Memory
+# Tab 1: Memory Assistant
 # ---------------------------
 with tab1:
-    st.header("🧠 Orion Memory")
+    st.header("🧠 Orion Memory Assistant")
 
-    # Recall
-    st.subheader("🔎 Recall Facts")
-    if st.button("Recall"):
-        resp = call_orion("recall")
-        if isinstance(resp, list):
-            if resp:
-                st.write("### 🧾 Facts in memory:")
-                for i, fact in enumerate(resp, 1):
-                    st.write(f"💡 {i}. {fact}")
-            else:
-                st.info("No facts stored yet.")
-        elif isinstance(resp, dict) and "error" in resp:
-            st.error(resp["error"])
+    # --- Manual memory entry
+    st.subheader("📝 Remember Something")
+    new_fact = st.text_input("Enter something for Orion to remember:")
+
+    if st.button("Save Fact"):
+        if new_fact.strip():
+            resp = call_orion("remember", {"content": new_fact})
+            st.success(f"✅ Orion remembered: {new_fact}")
         else:
-            st.write(resp)
+            st.warning("⚠️ Please type something before saving.")
 
-    # Summarize
-    st.subheader("📝 Summarize Memory")
+    # --- Freeform Recall (AI Q&A style)
+    st.subheader("🔎 Ask Orion")
+    user_query = st.text_input("Ask a question (e.g., 'What’s overdue in Project X?')")
+
+    if st.button("Ask Orion"):
+        if user_query.strip():
+            call_orion("remember", {"content": f"User asked: {user_query}"})
+            resp = call_orion("recall")
+
+            if isinstance(resp, list) and resp:
+                st.write("### 🤖 Orion's Answer")
+                answer = f"Here’s what I know about your request '{user_query}':\n"
+                for i, fact in enumerate(resp, 1):
+                    answer += f"- {fact}\n"
+                st.info(answer.strip())
+            elif isinstance(resp, dict) and "error" in resp:
+                st.error(resp["error"])
+            else:
+                st.info("Orion has no facts related to your question yet.")
+        else:
+            st.warning("⚠️ Please type a question first.")
+
+    # --- Summarize All Memory
+    st.subheader("📝 Summarize All Memory")
     if st.button("Summarize Memory"):
-        resp = call_orion("summarize")
+        resp = call_orion("summarize", {"content": "Summarize all stored facts clearly"})
         if resp and not isinstance(resp, dict):
             st.info(resp)
         else:
-            st.warning("No summary available (API may not support summarize).")
+            st.warning("No summary available.")
 
-    # Book Mode
+    # --- Book Mode
     st.subheader("📚 Book Mode")
     book_text = st.text_area("Paste text or document to ingest into Orion Memory:")
     if st.button("Ingest Text"):
@@ -98,7 +114,7 @@ with tab1:
         else:
             st.warning("⚠️ Nothing to ingest.")
 
-    # Decay
+    # --- Decay
     st.subheader("🌒 Decay")
     if st.button("Trigger Decay"):
         resp = call_orion("decay")
@@ -106,10 +122,10 @@ with tab1:
 
 
 # ---------------------------
-# Tab 2: Task Tracker
+# Tab 2: AI Task Manager
 # ---------------------------
 with tab2:
-    st.header("✅ Orion Task Tracker")
+    st.header("✅ Orion AI Task Manager")
 
     conn = sqlite3.connect("orion_tasks.db", check_same_thread=False)
     c = conn.cursor()
@@ -167,8 +183,6 @@ with tab2:
             if isinstance(hint, list) and hint:
                 for i, item in enumerate(hint, 1):
                     st.write(f"💡 {i}. {item}")
-            elif isinstance(hint, dict) and "error" in hint:
-                st.error(hint["error"])
             else:
                 st.info("No suggestions.")
 
@@ -219,14 +233,17 @@ with tab2:
             st.download_button("📥 Export CSV", df.to_csv(index=False), "tasks.csv", "text/csv")
 
             # AI Summary with fallback
-            if st.button("🤖 Summarize Tasks"):
-                # Try Orion API first
-                summary = call_orion("summarize")
+            if st.button("🤖 Summarize Tasks with AI"):
+                prompt = f"Summarize all tasks for project '{selected_proj_name}'. Highlight overdue, pending, and completed work. Suggest next steps."
+                summary = call_orion("summarize", {"content": prompt})
+
                 if summary and not isinstance(summary, dict):
                     st.write("### 📝 AI Summary from Orion")
-                    st.info(summary)
+                    if isinstance(summary, list):
+                        st.info("\n".join([f"- {s}" for s in summary]))
+                    else:
+                        st.info(str(summary))
                 else:
-                    # Local fallback
                     summary_lines = []
                     for desc, status, notes, due in rows:
                         if due:
