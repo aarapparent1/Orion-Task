@@ -40,7 +40,7 @@ def split_sentences(text: str) -> list[str]:
 
 
 # ================================================================
-# ORION MEMORY (Upgraded)
+# ORION MEMORY
 # ================================================================
 if page == "Orion Memory":
     st.header("📚 Orion Memory")
@@ -94,25 +94,34 @@ if page == "Orion Memory":
 
     st.markdown("---")
 
-    # --- Recall ---
+    # --- Recall (fixed) ---
     st.subheader("🔍 Recall")
     query = st.text_input("Ask Orion (e.g., What is Orion?)")
     if st.button("Recall"):
         data = call_orion("provenance/demo", "GET")
         if isinstance(data, list) and data:
-            # loose keyword match: if ANY word in query appears in fact
             results = []
+
+            # 1. Exact/substring match first
             for f in data:
                 fact_text = f.get("fact", "")
                 source = f.get("source", "unknown")
                 ts = f.get("timestamp", "")[:19]
-                if not query or any(word in fact_text.lower() for word in query.lower().split()):
+                if query and query.lower() in fact_text.lower():
                     results.append(f"- **{fact_text}**  _(source: {source}, time: {ts})_")
 
+            # 2. If no results, try keyword match
+            if not results and query:
+                for f in data:
+                    fact_text = f.get("fact", "")
+                    if any(word in fact_text.lower() for word in query.lower().split()):
+                        results.append(f"- **{fact_text}**")
+
+            # 3. Fallback if still nothing
             if results:
                 st.markdown("\n".join(results))
             else:
-                st.info("No exact matches. Here’s everything Orion remembers:")
+                st.info("No direct matches. Here’s everything Orion remembers:")
                 for f in data:
                     fact_text = f.get("fact", "")
                     source = f.get("source", "unknown")
@@ -121,7 +130,7 @@ if page == "Orion Memory":
         else:
             st.info("No memory found yet (or the API is unreachable).")
 
-    # --- Summarize Facts (local AI-style) ---
+    # --- Summarize Facts ---
     if st.button("Summarize Facts"):
         data = call_orion("provenance/demo", "GET")
         if isinstance(data, list) and data:
@@ -136,7 +145,7 @@ if page == "Orion Memory":
 
 
 # ================================================================
-# TASK MANAGER (UNCHANGED)
+# TASK MANAGER (unchanged)
 # ================================================================
 if page == "Task Manager":
     st.header("✅ Orion Task Manager")
@@ -179,7 +188,7 @@ if page == "Task Manager":
         else:
             st.info("No tasks yet.")
 
-        # Summarize tasks (local AI-like)
+        # Summarize tasks
         if st.button("Summarize Tasks"):
             task_texts = [t["task"] for t in tasks]
             if task_texts:
@@ -188,7 +197,6 @@ if page == "Task Manager":
                     f"Focus: {', '.join(task_texts[:3])}" + ("..." if len(task_texts) > 3 else "")
                 )
                 st.success(summary)
-                # store the summary in memory (optional)
                 try:
                     _ = requests.post(f"{ORION_API}/fact", json={"user_id": "demo", "fact": f"Task summary: {summary}"})
                 except:
@@ -196,7 +204,7 @@ if page == "Task Manager":
             else:
                 st.info("No tasks to summarize.")
 
-        # Clear tasks for the active project
+        # Clear tasks
         if st.button("Clear Tasks"):
             st.session_state["projects"][project] = []
             st.success(f"Cleared tasks for {project}")
