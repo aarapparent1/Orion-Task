@@ -14,7 +14,8 @@ st.write("This app combines **Orion Memory** and an **AI-assisted Task Tracker**
 # ---------------------------
 # Orion Memory API
 # ---------------------------
-ORION_API = "http://localhost:8000"  # change if deployed
+ORION_API = "ORION_API = "https://orion-memory.onrender.com"
+"  # change if deployed
 
 def call_orion(endpoint: str, payload=None, method="POST"):
     """Helper for Orion API calls."""
