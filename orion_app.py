@@ -7,7 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import textwrap
 
-# ✅ Orion API (Render deployment)
+# Orion API (Render backend)
 ORION_API = "https://orion-memory.onrender.com"
 USER_ID = "demo"  # fixed for public demo
 
@@ -39,7 +39,7 @@ def call_orion(endpoint, payload=None, user_id=USER_ID):
             try:
                 return resp.json()
             except Exception:
-                return {"raw": resp.text}
+                return resp.text
         else:
             return {"error": f"API error: {resp.text}"}
 
@@ -62,20 +62,33 @@ with tab1:
     st.header("🧠 Orion Memory")
 
     # Recall
-    st.subheader("🔎 Recall")
+    st.subheader("🔎 Recall Facts")
     if st.button("Recall"):
         resp = call_orion("recall")
-        st.write(resp if "error" not in resp else resp["error"])
+        if isinstance(resp, list):
+            if resp:
+                st.write("### 🧾 Facts in memory:")
+                for i, fact in enumerate(resp, 1):
+                    st.write(f"💡 {i}. {fact}")
+            else:
+                st.info("No facts stored yet.")
+        elif isinstance(resp, dict) and "error" in resp:
+            st.error(resp["error"])
+        else:
+            st.write(resp)
 
     # Summarize
-    st.subheader("📝 Summarize")
+    st.subheader("📝 Summarize Memory")
     if st.button("Summarize Memory"):
         resp = call_orion("summarize")
-        st.write(resp if "error" not in resp else resp["error"])
+        if resp and not isinstance(resp, dict):
+            st.info(resp)
+        else:
+            st.warning("No summary available (API may not support summarize).")
 
     # Book Mode
     st.subheader("📚 Book Mode")
-    book_text = st.text_area("Paste text or document to remember:")
+    book_text = st.text_area("Paste text or document to ingest into Orion Memory:")
     if st.button("Ingest Text"):
         if book_text.strip():
             chunks = textwrap.wrap(book_text, 1000)
@@ -151,7 +164,13 @@ with tab2:
         # Recall hints
         with st.expander("🧠 Memory suggestions"):
             hint = call_orion("recall")
-            st.write(hint if "error" not in hint else "No suggestions.")
+            if isinstance(hint, list) and hint:
+                for i, item in enumerate(hint, 1):
+                    st.write(f"💡 {i}. {item}")
+            elif isinstance(hint, dict) and "error" in hint:
+                st.error(hint["error"])
+            else:
+                st.info("No suggestions.")
 
         # Delete Project
         if st.button(f"🗑️ Delete Project '{selected_proj_name}'"):
@@ -199,10 +218,27 @@ with tab2:
             # Export
             st.download_button("📥 Export CSV", df.to_csv(index=False), "tasks.csv", "text/csv")
 
-            # AI Summary
+            # AI Summary with fallback
             if st.button("🤖 Summarize Tasks"):
-                summary = call_orion("recall")
-                st.info(summary if "error" not in summary else "No AI summary.")
+                # Try Orion API first
+                summary = call_orion("summarize")
+                if summary and not isinstance(summary, dict):
+                    st.write("### 📝 AI Summary from Orion")
+                    st.info(summary)
+                else:
+                    # Local fallback
+                    summary_lines = []
+                    for desc, status, notes, due in rows:
+                        if due:
+                            summary_lines.append(f"- {desc} (status: {status}, due {due})")
+                        else:
+                            summary_lines.append(f"- {desc} (status: {status})")
+
+                    if summary_lines:
+                        st.write("### 📝 Local Task Summary")
+                        st.info("\n".join(summary_lines))
+                    else:
+                        st.warning("No tasks found to summarize.")
         else:
             st.info("No tasks yet. Add one above.")
     else:
