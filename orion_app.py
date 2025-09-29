@@ -1,153 +1,282 @@
 import streamlit as st
-import requests
 import pandas as pd
+import sqlite3
 import re
 from datetime import datetime
 
-# ---------------------------------
-# Config
-# ---------------------------------
-ORION_API = "https://orion-memory.onrender.com"
+# ================================================================
+# Storage (SQLite) — sticky memory for demo
+# ================================================================
+DB_PATH = "orion_memories.db"
 
+def db_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def init_db():
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS facts(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                fact TEXT NOT NULL,
+                source TEXT DEFAULT 'manual',
+                ts TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS prefs(
+                user_id TEXT PRIMARY KEY,
+                answer_style TEXT CHECK(answer_style IN ('short','detailed')) NOT NULL DEFAULT 'short',
+                ts TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        con.commit()
+
+def save_pref(user_id: str, style: str):
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute("""
+            INSERT INTO prefs(user_id, answer_style, ts)
+            VALUES(?,?,datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                answer_style=excluded.answer_style,
+                ts=datetime('now')
+        """, (user_id, style))
+        con.commit()
+
+def get_pref(user_id: str) -> str:
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute("SELECT answer_style FROM prefs WHERE user_id=?", (user_id,))
+        row = cur.fetchone()
+        return row[0] if row else "short"
+
+def add_fact(user_id: str, fact: str, source: str = "manual"):
+    fact = fact.strip()
+    if not fact:
+        return
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO facts(user_id, fact, source, ts) VALUES(?,?,?,datetime('now'))",
+            (user_id, fact, source)
+        )
+        con.commit()
+    prune_if_needed(user_id)
+
+def clear_facts(user_id: str):
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute("DELETE FROM facts WHERE user_id=?", (user_id,))
+        con.commit()
+
+def get_facts(user_id: str):
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT id, fact, source, ts
+            FROM facts
+            WHERE user_id=?
+            ORDER BY id DESC
+        """, (user_id,))
+        rows = cur.fetchall()
+        return [{"id": r[0], "fact": r[1], "source": r[2], "timestamp": r[3]} for r in rows]
+
+def oldest_n_facts(user_id: str, n: int):
+    with db_conn() as con:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT id, fact FROM facts
+            WHERE user_id=?
+            ORDER BY id ASC
+            LIMIT ?
+        """, (user_id, n))
+        return cur.fetchall()
+
+def delete_ids(ids: list[int]):
+    if not ids:
+        return
+    with db_conn() as con:
+        cur = con.cursor()
+        qmarks = ",".join("?" * len(ids))
+        cur.execute(f"DELETE FROM facts WHERE id IN ({qmarks})", ids)
+        con.commit()
+
+def prune_if_needed(user_id: str, limit: int = 20, summarize_take: int = 10):
+    """If > limit facts, summarize the oldest summarize_take facts into 1 fact and delete them."""
+    facts_all = get_facts(user_id)
+    if len(facts_all) <= limit:
+        return
+    # take oldest N (need ASC)
+    old = oldest_n_facts(user_id, summarize_take)
+    if not old:
+        return
+    # make a light summary (first sentences/short trims)
+    snippets = []
+    for _, f in old:
+        s = first_sentence(f)
+        snippets.append(s if len(s) <= 140 else s[:140] + "…")
+    summary_text = " | ".join(snippets[:5])  # cap to avoid huge summary
+    add_fact(user_id, f"Auto-summary ({len(old)} facts): {summary_text}", source="auto_prune")
+    delete_ids([oid for oid, _ in old])
+
+# ================================================================
+# Text helpers
+# ================================================================
+def split_sentences(text: str) -> list[str]:
+    # Simple sentence splitter
+    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text.strip()) if s.strip()]
+
+def first_sentence(text: str) -> str:
+    parts = split_sentences(text)
+    return parts[0] if parts else text
+
+def style_answer(text: str, style: str) -> str:
+    if style == "short":
+        # compress to first sentence or ~20 words
+        s = first_sentence(text)
+        words = s.split()
+        return " ".join(words[:20]) + ("…" if len(words) > 20 else "")
+    # detailed returns full text
+    return text
+
+# ================================================================
+# Streamlit App
+# ================================================================
 st.set_page_config(page_title="Orion AI Demo Suite", layout="wide")
 st.title("🧠 Orion AI Demo Suite")
 
-page = st.sidebar.radio("Navigate", ["Orion Memory", "Task Manager"])
+init_db()
 
+# Single demo user (can wire to auth later)
+USER_ID = "demo"
 
-# ---------------------------------
-# Helpers
-# ---------------------------------
-def call_orion(path: str, method: str = "GET", payload: dict | None = None):
-    url = f"{ORION_API}/{path}"
-    try:
-        if method == "GET":
-            r = requests.get(url, params=payload)
-        elif method == "POST":
-            r = requests.post(url, json=payload)
-        else:
-            return {"error": "invalid method"}
-        if r.status_code == 200:
-            return r.json()
-        return {"error": f"{r.status_code}: {r.text}"}
-    except Exception as e:
-        return {"error": str(e)}
+page = st.sidebar.radio("Navigate", ["Preferences", "Orion Memory", "Task Manager"])
 
+# -------------------------------
+# Preferences
+# -------------------------------
+if page == "Preferences":
+    st.header("⚙️ Preferences")
+    current = get_pref(USER_ID)
+    choice = st.radio("Answer style", ["short", "detailed"], index=0 if current == "short" else 1, horizontal=True)
+    if st.button("Save Preferences"):
+        save_pref(USER_ID, choice)
+        st.success(f"Saved — Orion will answer in **{choice}** style.")
 
-def split_sentences(text: str) -> list[str]:
-    # simple sentence splitter: split on . ! ?
-    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text.strip()) if s.strip()]
+    # Quick view: current facts count
+    facts_count = len(get_facts(USER_ID))
+    st.caption(f"Memory size: {facts_count} facts (auto-prunes when > 20).")
 
-
-# ================================================================
-# ORION MEMORY
-# ================================================================
-if page == "Orion Memory":
+# -------------------------------
+# Orion Memory
+# -------------------------------
+elif page == "Orion Memory":
     st.header("📚 Orion Memory")
 
-    # --- Quick Fact Entry ---
+    # Quick Fact
     st.subheader("Quick Fact")
     fact = st.text_input("Enter a single fact for Orion to remember")
-    col_qf1, col_qf2 = st.columns([1, 1])
-    with col_qf1:
+    col1, col2 = st.columns(2)
+    with col1:
         if st.button("Save Fact"):
             if fact.strip():
-                resp = call_orion("fact", "POST", {"user_id": "demo", "fact": fact.strip()})
-                if isinstance(resp, dict) and "error" not in resp:
-                    st.success("Fact saved.")
-                else:
-                    st.error(f"Failed to save fact. {resp}")
+                add_fact(USER_ID, fact.strip(), source="manual")
+                st.success("Fact saved.")
             else:
                 st.warning("Please enter something first.")
-    with col_qf2:
+    with col2:
         if st.button("Clear Memory"):
-            resp = call_orion("clear/demo", "POST")
-            if isinstance(resp, dict) and "error" not in resp:
-                st.success("All memory cleared for demo user.")
-            else:
-                st.error(f"Failed to clear memory. {resp}")
+            clear_facts(USER_ID)
+            st.success("All memory cleared for demo user.")
 
-    st.markdown("---")
+    st.divider()
 
-    # --- Book Mode ---
+    # Book Mode
     st.subheader("Book Mode (Paste multiple sentences)")
-    text = st.text_area("Paste text for Orion to remember (it will split into sentences and add a summary)", height=180)
+    text = st.text_area("Paste text for Orion to remember (it splits into sentences and adds a summary)", height=180)
     if st.button("Remember (Book Mode)"):
         if text.strip():
             sentences = split_sentences(text)
             stored = 0
             for s in sentences:
-                resp = call_orion("fact", "POST", {"user_id": "demo", "fact": s, "source": "book_mode"})
-                if isinstance(resp, dict) and "error" not in resp:
-                    stored += 1
-            # add a simple summary fact (first 2 sentences)
-            if sentences:
-                summary = " ".join(sentences[:2]) if len(sentences) > 1 else sentences[0]
-                _ = call_orion("fact", "POST", {
-                    "user_id": "demo",
-                    "fact": f"Summary: {summary}",
-                    "source": "book_mode_summary"
-                })
+                add_fact(USER_ID, s, source="book_mode")
+                stored += 1
+            summary = " ".join(sentences[:2]) if len(sentences) > 1 else sentences[0]
+            add_fact(USER_ID, f"Summary: {summary}", source="book_mode_summary")
             st.success(f"Stored {stored} facts + 1 summary from Book Mode.")
         else:
             st.warning("Please paste some text.")
 
-    st.markdown("---")
+    st.divider()
 
-    # --- Recall (fixed) ---
+    # Recall (with preference + feedback)
     st.subheader("🔍 Recall")
     query = st.text_input("Ask Orion (e.g., What is Orion?)")
     if st.button("Recall"):
-        data = call_orion("provenance/demo", "GET")
-        if isinstance(data, list) and data:
-            results = []
+        style = get_pref(USER_ID)
+        facts = get_facts(USER_ID)  # newest first
 
-            # 1. Exact/substring match first
-            for f in data:
-                fact_text = f.get("fact", "")
-                source = f.get("source", "unknown")
-                ts = f.get("timestamp", "")[:19]
-                if query and query.lower() in fact_text.lower():
-                    results.append(f"- **{fact_text}**  _(source: {source}, time: {ts})_")
-
-            # 2. If no results, try keyword match
-            if not results and query:
-                for f in data:
-                    fact_text = f.get("fact", "")
-                    if any(word in fact_text.lower() for word in query.lower().split()):
-                        results.append(f"- **{fact_text}**")
-
-            # 3. Fallback if still nothing
-            if results:
-                st.markdown("\n".join(results))
-            else:
-                st.info("No direct matches. Here’s everything Orion remembers:")
-                for f in data:
-                    fact_text = f.get("fact", "")
-                    source = f.get("source", "unknown")
-                    ts = f.get("timestamp", "")[:19]
-                    st.write(f"- **{fact_text}**  _(source: {source}, time: {ts})_")
+        if not facts:
+            st.info("No memory found yet.")
         else:
-            st.info("No memory found yet (or the API is unreachable).")
+            # 1) Try exact/substring match
+            hits = []
+            if query:
+                for f in facts:
+                    if query.lower() in f["fact"].lower():
+                        hits.append(f)
 
-    # --- Summarize Facts ---
+            # 2) If none, keyword match
+            if not hits and query:
+                qwords = [w for w in query.lower().split() if len(w) > 2]
+                for f in facts:
+                    if any(w in f["fact"].lower() for w in qwords):
+                        hits.append(f)
+
+            # 3) Fallback: show recent facts
+            results = hits if hits else facts[:5]
+
+            # Render answers in preferred style
+            st.write(f"**Answer style:** `{style}`")
+            for f in results:
+                rendered = style_answer(f["fact"], style)
+                st.markdown(f"- **{rendered}**  _(source: {f['source']}, time: {f['timestamp'][:19]})_")
+
+            # Feedback UI (per recall session, user can add a correction)
+            with st.expander("Feedback"):
+                fb_col1, fb_col2 = st.columns([1, 2])
+                with fb_col1:
+                    good = st.button("👍 Looks good")
+                with fb_col2:
+                    bad = st.button("👎 Needs correction")
+                if good:
+                    add_fact(USER_ID, "Feedback: user approved the recall output.", source="feedback_up")
+                    st.success("Thanks! Orion recorded your positive feedback.")
+                if bad:
+                    correction = st.text_input("What should Orion remember instead?")
+                    if st.button("Save Correction"):
+                        if correction.strip():
+                            add_fact(USER_ID, f"Correction: {correction.strip()}", source="feedback_down")
+                            st.success("Saved correction — Orion will keep this in mind.")
+                        else:
+                            st.warning("Please enter a correction before saving.")
+
+    # Summarize all facts (local)
     if st.button("Summarize Facts"):
-        data = call_orion("provenance/demo", "GET")
-        if isinstance(data, list) and data:
-            facts = [f.get("fact", "") for f in data if f.get("fact")]
-            if facts:
-                highlights = ", ".join(facts[:3]) + ("..." if len(facts) > 3 else "")
-                st.success(f"Orion currently remembers {len(facts)} facts. Highlights: {highlights}")
-            else:
-                st.info("No facts to summarize.")
+        facts = get_facts(USER_ID)
+        if facts:
+            texts = [f["fact"] for f in facts]
+            highlights = ", ".join([first_sentence(t) for t in texts[:3]]) + ("…" if len(texts) > 3 else "")
+            st.success(f"Orion currently remembers {len(facts)} facts. Highlights: {highlights}")
         else:
-            st.info("No facts found.")
+            st.info("No facts to summarize yet.")
 
-
-# ================================================================
-# TASK MANAGER (unchanged)
-# ================================================================
-if page == "Task Manager":
+# -------------------------------
+# Task Manager (UNCHANGED)
+# -------------------------------
+elif page == "Task Manager":
     st.header("✅ Orion Task Manager")
 
     if "projects" not in st.session_state:
@@ -188,7 +317,7 @@ if page == "Task Manager":
         else:
             st.info("No tasks yet.")
 
-        # Summarize tasks
+        # Summarize tasks (local AI-like)
         if st.button("Summarize Tasks"):
             task_texts = [t["task"] for t in tasks]
             if task_texts:
@@ -197,10 +326,6 @@ if page == "Task Manager":
                     f"Focus: {', '.join(task_texts[:3])}" + ("..." if len(task_texts) > 3 else "")
                 )
                 st.success(summary)
-                try:
-                    _ = requests.post(f"{ORION_API}/fact", json={"user_id": "demo", "fact": f"Task summary: {summary}"})
-                except:
-                    pass
             else:
                 st.info("No tasks to summarize.")
 
