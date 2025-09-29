@@ -9,20 +9,21 @@ import textwrap
 
 # ✅ Orion API (live on Render)
 ORION_API = "https://orion-memory.onrender.com"
+USER_ID = "demo"  # Hardcoded for public demo
 
 # ---------------------------
 # Helper: Call Orion Memory API
 # ---------------------------
-def call_orion(endpoint, payload=None):
+def call_orion(endpoint, payload=None, user_id=USER_ID):
     try:
         if endpoint == "recall":
-            resp = requests.post(f"{ORION_API}/recall", json=payload)
+            resp = requests.get(f"{ORION_API}/recall/{user_id}")
         elif endpoint == "remember":
-            resp = requests.post(f"{ORION_API}/remember", json=payload)
+            resp = requests.post(f"{ORION_API}/remember/{user_id}", json=payload)
         elif endpoint == "summarize":
-            resp = requests.get(f"{ORION_API}/summarize")
+            resp = requests.get(f"{ORION_API}/summarize/{user_id}")
         elif endpoint == "decay":
-            resp = requests.post(f"{ORION_API}/decay")
+            resp = requests.post(f"{ORION_API}/decay/{user_id}")
         else:
             return {"error": "Unknown endpoint"}
 
@@ -51,11 +52,8 @@ with tab1:
     st.subheader("🔎 Recall")
     recall_query = st.text_input("What should Orion remember?")
     if st.button("Recall"):
-        if recall_query.strip():
-            resp = call_orion("recall", {"query": recall_query})
-            st.write(resp if "error" not in resp else resp["error"])
-        else:
-            st.warning("⚠️ Please enter a query.")
+        resp = call_orion("recall", {"query": recall_query})
+        st.write(resp if "error" not in resp else resp["error"])
 
     # Summarize
     st.subheader("📝 Summarize")
@@ -68,7 +66,6 @@ with tab1:
     book_text = st.text_area("Paste a document or long notes here:")
     if st.button("Ingest Text"):
         if book_text.strip():
-            # Auto-chunk text
             chunks = textwrap.wrap(book_text, 1000)
             for chunk in chunks:
                 call_orion("remember", {"content": chunk})
