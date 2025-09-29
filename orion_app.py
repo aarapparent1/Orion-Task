@@ -1,147 +1,166 @@
 import streamlit as st
 import requests
-import pandas as pd
+import re
 from datetime import datetime
 
-# Orion Memory API URL (your deployed backend)
-ORION_API = "https://orion-memory.onrender.com"
+# --------------------
+# Config
+# --------------------
+ORION_API = "https://orion-memory.onrender.com"  # your backend on Render
 
-st.set_page_config(page_title="Orion Demo Suite", layout="wide")
+st.set_page_config(page_title="🧠 Orion Demo Suite", layout="wide")
 
-st.title("🧠 Orion AI Demo Suite")
-
-# Sidebar navigation
-page = st.sidebar.radio("Navigate", ["Orion Memory", "Task Manager"])
-
-
-# ================================================================
-# ORION MEMORY TAB
-# ================================================================
-if page == "Orion Memory":
-    st.header("📚 Orion Memory")
-
-    st.subheader("Book Mode (Feed Orion)")
-    text = st.text_area("Paste text for Orion to remember")
-    if st.button("Remember"):
-        if text.strip():
-            sentences = [s.strip() for s in text.split(".") if s.strip()]
-            stored = 0
-            for s in sentences:
-                payload = {"user_id": "demo", "fact": s}
-                try:
-                    r = requests.post(f"{ORION_API}/fact", json=payload)
-                    if r.status_code == 200:
-                        stored += 1
-                except Exception as e:
-                    st.error(f"Error storing fact: {e}")
-            # also save a summary fact
-            summary = f"Summary: {sentences[0]} ... ({len(sentences)} facts total)"
-            requests.post(f"{ORION_API}/fact", json={"user_id": "demo", "fact": summary})
-            st.success(f"Stored {stored} facts + 1 summary from Book Mode.")
+# --------------------
+# Helper: Call Orion API
+# --------------------
+def call_orion(endpoint: str, method: str = "GET", payload: dict = None):
+    url = f"{ORION_API}/{endpoint}"
+    try:
+        if method == "GET":
+            resp = requests.get(url, params=payload)
+        elif method == "POST":
+            resp = requests.post(url, json=payload)
         else:
-            st.warning("Please enter some text.")
+            return {"error": "invalid method"}
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"{resp.status_code} {resp.text}"}
+    except Exception as e:
+        return {"error": str(e)}
 
-    st.subheader("🔍 Recall")
-    query = st.text_input("Ask Orion", placeholder="e.g. What is Orion?")
+# --------------------
+# Helper: Split sentences for Book Mode
+# --------------------
+def split_into_sentences(text: str):
+    return re.split(r'(?<=[.!?]) +', text.strip())
+
+# --------------------
+# Sidebar
+# --------------------
+st.sidebar.title("🧭 Orion Demo Suite")
+tab_choice = st.sidebar.radio("Choose a demo", ["Orion Memory", "Task Tracker"])
+
+# --------------------
+# Tab 1: Orion Memory
+# --------------------
+if tab_choice == "Orion Memory":
+    st.title("🧠 Orion Memory")
+
+    # --- Book Mode
+    st.header("📖 Book Mode")
+    book_text = st.text_area(
+        "Paste a passage. Orion will split it into facts and add a summary.",
+        height=200
+    )
+    if st.button("Remember in Book Mode"):
+        if book_text.strip():
+            sentences = split_into_sentences(book_text)
+            stored_count = 0
+            for s in sentences:
+                if s.strip():
+                    call_orion("fact", "POST", {
+                        "user_id": "demo",
+                        "fact": s.strip(),
+                        "source": "book_mode"
+                    })
+                    stored_count += 1
+            # crude summary = first 2 sentences
+            if len(sentences) > 1:
+                summary = " ".join(sentences[:2])
+                call_orion("fact", "POST", {
+                    "user_id": "demo",
+                    "fact": f"Summary: {summary}",
+                    "source": "book_mode_summary"
+                })
+            st.success(f"Stored {stored_count} facts + 1 summary")
+        else:
+            st.warning("Please paste some text first.")
+
+    # --- Recall
+    st.header("🔍 Recall")
+    query = st.text_input("What should Orion recall?")
     if st.button("Recall"):
-        try:
-            r = requests.get(f"{ORION_API}/provenance/demo")
-            if r.status_code == 200:
-                data = r.json()
-                results = []
+        data = call_orion("provenance/demo", "GET")
+        if isinstance(data, list) and data:
+            results = []
+            for f in data:
+                fact = f.get("fact", "")
+                source = f.get("source", "unknown")
+                ts = f.get("timestamp", "")[:19]
+                # Loose word match: any word in query appears in fact
+                if not query or any(word in fact.lower() for word in query.lower().split()):
+                    results.append(f"- **{fact}**  _(source: {source}, time: {ts})_")
+
+            if results:
+                st.markdown("\n".join(results))
+            else:
+                # fallback: show everything
+                st.info("No exact matches. Here’s everything Orion remembers:")
                 for f in data:
                     fact = f.get("fact", "")
                     source = f.get("source", "unknown")
                     ts = f.get("timestamp", "")[:19]
+                    st.write(f"- **{fact}**  _(source: {source}, time: {ts})_")
+        else:
+            st.info("No memory found or Orion unreachable.")
 
-                    # ✅ Loose keyword match
-                    if not query or any(word in fact.lower() for word in query.lower().split()):
-                        results.append(f"- **{fact}**  _(source: {source}, time: {ts})_")
+    # --- Memory Controls
+    st.header("🗑️ Memory Management")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Decay Memory"):
+            st.write(call_orion("decay/demo", "POST"))
+    with col2:
+        if st.button("Clear Memory"):
+            st.write(call_orion("clear/demo", "POST"))
 
-                if results:
-                    st.markdown("\n".join(results))
-                else:
-                    st.info("No exact matches. Here’s everything Orion remembers:")
-                    for f in data:
-                        fact = f.get("fact", "")
-                        source = f.get("source", "unknown")
-                        ts = f.get("timestamp", "")[:19]
-                        st.write(f"- **{fact}**  _(source: {source}, time: {ts})_")
-            else:
-                st.error("Failed to reach Orion Memory API.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-    if st.button("Clear Memory"):
-        try:
-            r = requests.post(f"{ORION_API}/clear/demo")
-            if r.status_code == 200:
-                st.success("Memory cleared for demo user.")
-            else:
-                st.error("Failed to clear memory.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-
-# ================================================================
-# TASK MANAGER TAB
-# ================================================================
-if page == "Task Manager":
-    st.header("✅ Orion Task Manager")
+# --------------------
+# Tab 2: Task Tracker
+# --------------------
+elif tab_choice == "Task Tracker":
+    st.title("📋 Orion Task Tracker")
 
     if "projects" not in st.session_state:
         st.session_state["projects"] = {}
         st.session_state["active_project"] = None
 
-    # Create new project
-    new_proj = st.text_input("New Project Name")
+    # --- Project selection
+    project = st.text_input("Start a new project")
     if st.button("Create Project"):
-        if new_proj:
-            st.session_state["projects"][new_proj] = []
-            st.session_state["active_project"] = new_proj
-            st.success(f"Project created: {new_proj}")
+        if project:
+            st.session_state["projects"][project] = []
+            st.session_state["active_project"] = project
+            st.success(f"Created project: {project}")
 
-    # Select active project
     if st.session_state["projects"]:
-        project = st.selectbox(
-            "Select Project",
-            options=list(st.session_state["projects"].keys()),
+        active = st.selectbox(
+            "Select a project",
+            list(st.session_state["projects"].keys()),
             index=list(st.session_state["projects"].keys()).index(st.session_state["active_project"]) if st.session_state["active_project"] else 0
         )
-        st.session_state["active_project"] = project
+        st.session_state["active_project"] = active
 
-        # Add task
-        task_desc = st.text_input("Task Description")
+        # --- Add tasks
+        task_desc = st.text_input("New task")
         if st.button("Add Task"):
             if task_desc:
-                st.session_state["projects"][project].append(
-                    {"task": task_desc, "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                )
-                st.success(f"Task added to {project}")
+                st.session_state["projects"][active].append(task_desc)
+                st.success(f"Added task: {task_desc}")
 
-        # List tasks
-        tasks = st.session_state["projects"][project]
-        if tasks:
-            df = pd.DataFrame(tasks)
-            st.table(df)
+        # --- Task list
+        st.subheader("Tasks")
+        if st.session_state["projects"][active]:
+            for t in st.session_state["projects"][active]:
+                st.write(f"- {t}")
         else:
             st.info("No tasks yet.")
 
-        # Summarize tasks (local AI-like)
+        # --- AI-ish summarizer
         if st.button("Summarize Tasks"):
-            task_texts = [t["task"] for t in tasks]
-            if task_texts:
-                summary = f"This project has {len(task_texts)} tasks. " \
-                          f"Focus: {', '.join(task_texts[:3])}" + ("..." if len(task_texts) > 3 else "")
+            tasks = st.session_state["projects"][active]
+            if tasks:
+                summary = f"{len(tasks)} tasks pending. Next: {tasks[0]}"
                 st.success(summary)
-                # save summary into Orion Memory
-                try:
-                    requests.post(f"{ORION_API}/fact", json={"user_id": "demo", "fact": f"Task summary: {summary}"})
-                except:
-                    pass
             else:
                 st.info("No tasks to summarize.")
-
-        if st.button("Clear Tasks"):
-            st.session_state["projects"][project] = []
-            st.success(f"Cleared tasks for {project}")
