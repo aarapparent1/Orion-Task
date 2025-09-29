@@ -1,262 +1,190 @@
 import streamlit as st
-import sqlite3
-import uuid
-from datetime import datetime, date
-import requests
 import pandas as pd
+import requests
 import matplotlib.pyplot as plt
-import textwrap
 
-# Orion API (Render backend)
+# -------------------------
+# Orion API Configuration
+# -------------------------
 ORION_API = "https://orion-memory.onrender.com"
-USER_ID = "demo"  # shared demo space for public demo
 
-# ---------------------------
-# Helper: Call Orion Memory API
-# ---------------------------
-def call_orion(endpoint, payload=None, user_id=USER_ID):
+def call_orion(endpoint, method="GET", payload=None):
+    """Helper to call Orion Memory API."""
+    url = f"{ORION_API}/{endpoint}"
     try:
-        if endpoint == "recall":
-            resp = requests.get(f"{ORION_API}/recall/{user_id}")
-
-        elif endpoint == "remember":  # maps to /fact
-            body = {"user_id": user_id, "fact": payload.get("content", "")}
-            resp = requests.post(f"{ORION_API}/fact", json=body)
-
-        elif endpoint == "summarize":
-            body = {"user_id": user_id, "fact": payload.get("content", "")}
-            requests.post(f"{ORION_API}/fact", json=body)  # log the request
-            resp = requests.get(f"{ORION_API}/recall/{user_id}")
-
-        elif endpoint == "decay":
-            resp = requests.post(f"{ORION_API}/decay/{user_id}")
-
+        if method == "GET":
+            r = requests.get(url)
+        elif method == "POST":
+            r = requests.post(url, json=payload)
         else:
-            return {"error": f"Unknown endpoint {endpoint}"}
-
-        if resp.status_code == 200:
-            try:
-                return resp.json()
-            except Exception:
-                return resp.text
+            return None
+        if r.status_code == 200:
+            return r.json()
         else:
-            return {"error": f"API error: {resp.text}"}
-
+            return None
     except Exception as e:
-        return {"error": f"Connection failed: {e}"}
+        return {"error": str(e)}
 
-
-# ---------------------------
-# Streamlit Layout
-# ---------------------------
+# -------------------------
+# Streamlit App Layout
+# -------------------------
 st.set_page_config(page_title="Orion Demo Suite", layout="wide")
-st.title("🚀 Orion AI API Suite")
+st.title("🛰️ Orion Demo Suite")
 
-tab1, tab2 = st.tabs(["🧠 Memory Assistant", "✅ AI Task Manager"])
+tabs = st.tabs(["🧠 Memory Assistant", "✅ Task Manager", "📖 Book Mode", "🔗 Provenance"])
 
-# ---------------------------
+# -------------------------
 # Tab 1: Memory Assistant
-# ---------------------------
-with tab1:
+# -------------------------
+with tabs[0]:
     st.header("🧠 Orion Memory Assistant")
 
-    # --- Manual memory entry
-    st.subheader("📝 Remember Something")
-    new_fact = st.text_input("Enter something for Orion to remember:")
-
+    # --- Remember Something ---
+    st.subheader("Remember Something")
+    new_fact = st.text_input("Enter a fact or note Orion should remember:")
     if st.button("Save Fact"):
         if new_fact.strip():
-            resp = call_orion("remember", {"content": new_fact})
-            st.success(f"✅ Orion remembered: {new_fact}")
+            resp = call_orion("fact", "POST", {"user_id": "demo", "fact": new_fact.strip()})
+            if resp:
+                st.success(f"Saved to memory: {new_fact}")
+            else:
+                st.error("Failed to save fact.")
         else:
-            st.warning("⚠️ Please type something before saving.")
+            st.warning("Please enter something before saving.")
 
-    # --- Freeform Recall (AI Q&A style)
-    st.subheader("🔎 Ask Orion")
-    user_query = st.text_input("Ask a question (e.g., 'What’s overdue in Project X?')")
-
-    if st.button("Ask Orion"):
-        if user_query.strip():
-            call_orion("remember", {"content": f"User asked: {user_query}"})
-            resp = call_orion("recall")
-
+    # --- Ask Orion / Recall ---
+    st.subheader("Ask Orion")
+    query = st.text_input("What should Orion remember or recall?")
+    if st.button("Recall"):
+        if query.strip():
+            resp = call_orion(f"recall/demo?query={query}")
             if isinstance(resp, list) and resp:
-                st.write("### 🤖 Orion's Answer")
-                answer = f"Here’s what I know about your request '{user_query}':\n"
-                for i, fact in enumerate(resp, 1):
-                    answer += f"- {fact}\n"
-                st.info(answer.strip())
-            elif isinstance(resp, dict) and "error" in resp:
-                st.error(resp["error"])
+                query_lower = query.lower()
+                if "what is orion" in query_lower or query_lower.strip() == "orion":
+                    st.info(
+                        "Orion is your AI-powered memory and task assistant. "
+                        "It remembers facts, manages tasks, provides summaries, "
+                        "and tracks provenance so you always know where knowledge came from."
+                    )
+                else:
+                    answer = f"Here’s what Orion knows related to '{query}':\n\n"
+                    for i, fact in enumerate(resp[:5], 1):
+                        answer += f"{i}. {fact}\n"
+                    st.info(answer.strip())
             else:
-                st.info("Orion has no facts related to your question yet.")
-        else:
-            st.warning("⚠️ Please type a question first.")
+                st.warning("I couldn’t find anything for that query.")
 
-    # --- Summarize All Memory
-    st.subheader("📝 Summarize All Memory")
-    if st.button("Summarize Memory"):
-        resp = call_orion("summarize", {"content": "Summarize all stored facts clearly"})
-        if resp and not isinstance(resp, dict):
-            st.info(resp)
+    # --- Summarize All Memory ---
+    st.subheader("Summarize Memory")
+    if st.button("Summarize All Facts"):
+        facts = call_orion("recall/demo")
+        if isinstance(facts, list) and facts:
+            summary = "Here’s a quick summary of stored facts:\n\n"
+            for i, fact in enumerate(facts[:10], 1):
+                summary += f"{i}. {fact}\n"
+            st.info(summary.strip())
         else:
-            st.warning("No summary available.")
+            st.info("No facts stored yet.")
 
-    # --- Book Mode
-    st.subheader("📚 Book Mode")
-    book_text = st.text_area("Paste text or document to ingest into Orion Memory:")
-    if st.button("Ingest Text"):
-        if book_text.strip():
-            chunks = textwrap.wrap(book_text, 1000)
-            for chunk in chunks:
-                call_orion("remember", {"content": chunk})
-            st.success(f"📘 Ingested {len(chunks)} chunks into Orion Memory!")
-        else:
-            st.warning("⚠️ Nothing to ingest.")
-
-    # --- Decay
-    st.subheader("🌒 Decay")
+    # --- Trigger Decay ---
+    st.subheader("Memory Lifecycle")
     if st.button("Trigger Decay"):
-        resp = call_orion("decay")
-        st.write(resp if "error" not in resp else resp["error"])
+        resp = call_orion("decay/demo", "POST")
+        st.success(f"Decay triggered. Response: {resp}")
 
+    # --- Clear Memory ---
+    st.subheader("Clear Memory (Demo Reset)")
+    if st.button("Clear All Memory Facts"):
+        resp = call_orion("clear/demo", "POST")  # you’d need to implement /clear in your API
+        st.success("All memory cleared for demo user.")
 
-# ---------------------------
-# Tab 2: AI Task Manager
-# ---------------------------
-with tab2:
-    st.header("✅ Orion AI Task Manager")
+# -------------------------
+# Tab 2: Task Manager
+# -------------------------
+with tabs[1]:
+    st.header("✅ Manage Projects & Tasks")
 
-    conn = sqlite3.connect("orion_tasks.db", check_same_thread=False)
-    c = conn.cursor()
+    if "projects" not in st.session_state:
+        st.session_state.projects = {}
 
-    # Projects
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS projects (
-        project_id TEXT PRIMARY KEY,
-        name TEXT,
-        created_at TIMESTAMP
-    )
-    """)
+    # --- Project Management ---
+    st.subheader("Projects")
+    new_project = st.text_input("Create a new project:")
+    if st.button("Add Project"):
+        if new_project.strip():
+            st.session_state.projects[new_project] = []
+            st.success(f"Project '{new_project}' created.")
+        else:
+            st.warning("Please enter a project name.")
 
-    # Tasks
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS tasks (
-        task_id TEXT PRIMARY KEY,
-        project_id TEXT,
-        description TEXT,
-        status TEXT,
-        notes TEXT,
-        due_date DATE,
-        created_at TIMESTAMP,
-        FOREIGN KEY (project_id) REFERENCES projects(project_id)
-    )
-    """)
-    conn.commit()
+    # --- Clear All Tasks/Projects ---
+    if st.button("Clear All Projects & Tasks"):
+        st.session_state.projects = {}
+        st.success("All projects and tasks cleared.")
 
-    # --- Create Project
-    st.subheader("Start a Project")
-    project_name = st.text_input("Enter project name:")
-    if st.button("Create Project"):
-        if project_name.strip():
-            project_id = str(uuid.uuid4())[:8]
-            c.execute("INSERT INTO projects (project_id, name, created_at) VALUES (?, ?, ?)",
-                      (project_id, project_name, datetime.now()))
-            conn.commit()
-            call_orion("remember", {"content": f"Started new project: {project_name}"})
-            st.success(f"✅ Project created: {project_name}")
-            st.rerun()
+    # --- If projects exist, show tasks ---
+    if st.session_state.projects:
+        project = st.selectbox("Select a project:", list(st.session_state.projects.keys()))
+        st.subheader(f"Tasks for {project}")
 
-    # --- Manage Projects
-    st.subheader("Manage Projects & Tasks")
-    c.execute("SELECT project_id, name FROM projects ORDER BY created_at DESC")
-    projects = c.fetchall()
-
-    if projects:
-        selected_proj_id, selected_proj_name = st.selectbox(
-            "Select a project:", options=projects, format_func=lambda p: p[1]
-        )
-
-        # Recall hints
-        with st.expander("🧠 Memory suggestions"):
-            hint = call_orion("recall")
-            if isinstance(hint, list) and hint:
-                for i, item in enumerate(hint, 1):
-                    st.write(f"💡 {i}. {item}")
-            else:
-                st.info("No suggestions.")
-
-        # Delete Project
-        if st.button(f"🗑️ Delete Project '{selected_proj_name}'"):
-            c.execute("DELETE FROM tasks WHERE project_id=?", (selected_proj_id,))
-            c.execute("DELETE FROM projects WHERE project_id=?", (selected_proj_id,))
-            conn.commit()
-            call_orion("remember", {"content": f"Deleted project: {selected_proj_name}"})
-            st.warning(f"Project '{selected_proj_name}' deleted.")
-            st.rerun()
-
-        # --- Add Task
-        st.write("### ➕ Add Task")
+        # --- Task Management ---
         task_desc = st.text_input("Task description:")
-        task_status = st.selectbox("Status:", ["pending", "in_progress", "done"])
-        task_notes = st.text_area("Notes (optional):")
-        due_date = st.date_input("Due date (optional)", value=None)
-
+        status = st.selectbox("Status", ["pending", "in_progress", "done"])
         if st.button("Add Task"):
             if task_desc.strip():
-                task_id = str(uuid.uuid4())[:8]
-                c.execute("INSERT INTO tasks (task_id, project_id, description, status, notes, due_date, created_at) "
-                          "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                          (task_id, selected_proj_id, task_desc, task_status,
-                           task_notes, due_date.isoformat() if isinstance(due_date, date) else None, datetime.now()))
-                conn.commit()
-                call_orion("remember", {"content": f"Task added to {selected_proj_name}: {task_desc}"})
-                st.success("✅ Task added.")
-                st.rerun()
+                st.session_state.projects[project].append({"task": task_desc, "status": status})
+                st.success(f"Task added to {project}: {task_desc} [{status}]")
+            else:
+                st.warning("Please enter a task description.")
 
-        # --- Show Tasks
-        st.write("### 📋 Task List")
-        c.execute("SELECT description, status, notes, due_date FROM tasks WHERE project_id=?", (selected_proj_id,))
-        rows = c.fetchall()
-
-        if rows:
-            df = pd.DataFrame(rows, columns=["Description", "Status", "Notes", "Due Date"])
+        tasks = st.session_state.projects[project]
+        if tasks:
+            df = pd.DataFrame(tasks)
             st.dataframe(df)
 
-            # Chart
-            st.write("### 📊 Status Overview")
+            # --- Status Summary ---
+            st.subheader("Status Summary")
+            counts = df["status"].value_counts()
             fig, ax = plt.subplots()
-            df["Status"].value_counts().plot(kind="bar", ax=ax)
+            counts.plot(kind="bar", ax=ax)
+            ax.set_title("Task Status Counts")
             st.pyplot(fig)
 
-            # Export
-            st.download_button("📥 Export CSV", df.to_csv(index=False), "tasks.csv", "text/csv")
-
-            # AI Summary with fallback
-            if st.button("🤖 Summarize Tasks with AI"):
-                prompt = f"Summarize all tasks for project '{selected_proj_name}'. Highlight overdue, pending, and completed work. Suggest next steps."
-                summary = call_orion("summarize", {"content": prompt})
-
-                if summary and not isinstance(summary, dict):
-                    st.write("### 📝 AI Summary from Orion")
-                    if isinstance(summary, list):
-                        st.info("\n".join([f"- {s}" for s in summary]))
-                    else:
-                        st.info(str(summary))
-                else:
-                    summary_lines = []
-                    for desc, status, notes, due in rows:
-                        if due:
-                            summary_lines.append(f"- {desc} (status: {status}, due {due})")
-                        else:
-                            summary_lines.append(f"- {desc} (status: {status})")
-
-                    if summary_lines:
-                        st.write("### 📝 Local Task Summary")
-                        st.info("\n".join(summary_lines))
-                    else:
-                        st.warning("No tasks found to summarize.")
+            # --- AI-like Summary ---
+            st.subheader("Summarize Tasks with AI")
+            summary = []
+            for s, c in counts.items():
+                summary.append(f"{c} tasks are {s}")
+            st.info("Summary: " + ", ".join(summary))
         else:
             st.info("No tasks yet. Add one above.")
+
+# -------------------------
+# Tab 3: Book Mode
+# -------------------------
+with tabs[2]:
+    st.header("📖 Book Mode")
+    text_block = st.text_area("Paste text to ingest into Orion memory:")
+    if st.button("Ingest Text"):
+        if text_block.strip():
+            resp = call_orion("fact", "POST", {"user_id": "demo", "fact": text_block.strip()})
+            if resp:
+                st.success("Book Mode text ingested into memory.")
+            else:
+                st.error("Failed to ingest text.")
+        else:
+            st.warning("Please paste text before ingesting.")
+
+# -------------------------
+# Tab 4: Provenance
+# -------------------------
+with tabs[3]:
+    st.header("🔗 Provenance")
+    prov = call_orion("provenance")
+    if isinstance(prov, list) and prov:
+        for p in prov[:10]:
+            st.write(
+                f"Fact: {p.get('fact','')} — Source: {p.get('source','unknown')} — Time: {p.get('timestamp','')}"
+            )
     else:
-        st.info("No projects yet. Create one above.")
+        st.info("No provenance data available.")
