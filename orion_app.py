@@ -7,7 +7,6 @@ ORION_API = "https://orion-memory.onrender.com"
 user_id = "demo"  # fixed demo user
 
 st.set_page_config(page_title="Orion Demo Suite", layout="wide")
-
 st.title("🧠 Orion Demo Suite")
 
 # Tabs: Memory, Task Manager, Provenance
@@ -22,8 +21,8 @@ with tabs[0]:
     if st.button("Remember Fact"):
         if fact_input.strip():
             resp = requests.post(
-                f"{ORION_API}/fact",
-                json={"user_id": user_id, "fact": fact_input}
+                f"{ORION_API}/fact/{user_id}",
+                json={"fact": fact_input}
             )
             if resp.status_code == 200:
                 st.success("Fact remembered.")
@@ -84,7 +83,6 @@ with tabs[1]:
             st.table(df)
         else:
             st.info("No tasks yet for this project.")
-
     else:
         st.info("No projects yet. Add one above.")
 
