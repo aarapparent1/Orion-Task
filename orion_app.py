@@ -17,6 +17,20 @@ with tabs[0]:
     st.header("📚 Orion Memory")
     st.write("Add facts, recall them, or paste large text into Book Mode.")
 
+    # Preferences
+    st.subheader("⚙️ Preferences")
+    pref = st.radio("Answer style", ["Short", "Detailed"], index=0)
+    if st.button("Save Preference"):
+        resp = requests.post(
+            f"{ORION_API}/fact/{user_id}",
+            json={"fact": f"User prefers {pref} answers"}
+        )
+        if resp.status_code == 200:
+            st.success("Preference saved.")
+        else:
+            st.error(resp.text)
+
+    # Single fact
     fact_input = st.text_input("Enter a fact to remember", key="fact_input")
     if st.button("Remember Fact"):
         if fact_input.strip():
@@ -29,6 +43,7 @@ with tabs[0]:
             else:
                 st.error(resp.text)
 
+    # Recall
     query = st.text_input("Recall something (query)", key="recall_input")
     if st.button("Recall"):
         if query.strip():
@@ -43,6 +58,7 @@ with tabs[0]:
             else:
                 st.error(resp.text)
 
+    # Book Mode
     st.subheader("📚 Book Mode")
     book_input = st.text_area("Paste long text here for Book Mode", height=150, key="book_input")
     if st.button("Submit to Book Mode"):
@@ -107,3 +123,10 @@ with tabs[2]:
                 st.error(f"Error: {resp.text}")
         except Exception as e:
             st.error(f"Failed to fetch provenance: {e}")
+
+    if st.button("Clear Memory"):
+        resp = requests.post(f"{ORION_API}/clear/{user_id}")
+        if resp.status_code == 200:
+            st.success("Memory cleared.")
+        else:
+            st.error(resp.text)
