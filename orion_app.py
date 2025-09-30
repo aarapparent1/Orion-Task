@@ -191,23 +191,23 @@ elif page == "Orion Memory":
                 rendered = style_answer(f["fact"], style)
                 st.markdown(f"- **{rendered}**  _(source: {f['source']}, time: {f['timestamp'][:19]})_")
 
-            # ✅ Fixed Feedback UI
+            # ✅ Fixed Feedback UI with persistent correction box
             with st.expander("Feedback"):
                 if "show_correction" not in st.session_state:
                     st.session_state["show_correction"] = False
 
                 fb_col1, fb_col2 = st.columns([1, 2])
                 with fb_col1:
-                    if st.button("👍 Looks good"):
+                    if st.button("👍 Looks good", key="good_feedback"):
                         add_fact(USER_ID, "Feedback: user approved the recall output.", source="feedback_up")
                         st.success("Thanks! Orion recorded your positive feedback.")
                 with fb_col2:
-                    if st.button("👎 Needs correction"):
+                    if st.button("👎 Needs correction", key="bad_feedback"):
                         st.session_state["show_correction"] = True
 
                 if st.session_state["show_correction"]:
-                    correction = st.text_input("What should Orion remember instead?", key="correction_input")
-                    if st.button("Save Correction"):
+                    correction = st.text_input("What should Orion remember instead?", key="correction_input_text")
+                    if st.button("Save Correction", key="save_correction"):
                         if correction.strip():
                             add_fact(USER_ID, f"Correction: {correction.strip()}", source="feedback_down")
                             st.success("Saved correction — Orion will keep this in mind.")
