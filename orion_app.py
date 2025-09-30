@@ -17,6 +17,22 @@ tabs = st.tabs(["Memory", "Task Manager"])
 with tabs[0]:
     st.header("Orion Memory")
 
+    # ----------------- Preferences -----------------
+    st.subheader("⚙️ Preferences")
+    pref = st.radio(
+        "How do you prefer Orion’s answers?",
+        ["Short answers", "Detailed answers"],
+        key="user_pref"
+    )
+    if st.button("Save Preference"):
+        requests.post(f"{ORION_API}/fact", json={
+            "user_id": USER_ID,
+            "fact": f"Preference: {pref}"
+        })
+        st.success(f"✅ Saved preference: {pref}")
+
+    st.divider()
+
     # ----------------- Add Fact -----------------
     st.subheader("➕ Add a Fact")
     new_fact = st.text_area("Enter something for Orion to remember", key="new_fact")
